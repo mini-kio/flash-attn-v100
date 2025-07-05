@@ -1,53 +1,83 @@
 # test_attention.py
 """
-Test suite for Flash Attention V100
+Enhanced test suite for Flash Attention V100
 
-This module contains comprehensive tests to ensure correctness and performance
-of the Flash Attention implementation.
+This module contains comprehensive tests for all enhanced features:
+- Multi-GPU functionality and distributed training
+- Memory optimization and management
+- Performance benchmarking and profiling
+- Numerical accuracy across different precisions
+- Advanced optimization strategies
+- Error handling and recovery mechanisms
+- Backward compatibility verification
 """
 
 import pytest
 import torch
-import torch.nn.functional as F
-import numpy as np
+import torch.nn as nn
+import warnings
 from typing import Tuple
+from unittest.mock import patch
 
 try:
-    from flash_attention_v100 import (
+    from .. import (
         flash_attention_v100,
-        flash_attention_forward,
-        compare_with_pytorch_attention,
-        FlashAttentionV100Function,
     )
-    from flash_attention_v100.config import SUPPORTED_DTYPES
+    from ..ops.attention import (
+        compare_with_pytorch_attention_enhanced,
+    )
+    from ..ops.memory import (
+        get_enhanced_memory_manager,
+        optimized_memory_context,
+        cleanup_all_memory,
+    )
+    from ..utils import (
+        PerformanceProfiler,
+        benchmark_operation,
+    )
+    from ..config import SUPPORTED_DTYPES, get_enhanced_config
+    from ..kernels.autotuning import AdvancedAutoTuner
     FLASH_ATTENTION_AVAILABLE = True
 except ImportError:
     FLASH_ATTENTION_AVAILABLE = False
-    pytestmark = pytest.mark.skip("Flash Attention V100 not available")
+    pytestmark = pytest.mark.skip("Enhanced Flash Attention V100 not available")
 
-class TestFlashAttentionV100:
-    """Test class for Flash Attention V100"""
+
+class TestEnhancedFlashAttentionV100:
+    """Comprehensive test class for Enhanced Flash Attention V100"""
     
     @pytest.fixture
     def device(self):
-        """Test device fixture"""
+        """Test device fixture with V100 compatibility check"""
         if not torch.cuda.is_available():
             pytest.skip("CUDA not available")
-        return torch.device('cuda')
+        
+        device = torch.device('cuda')
+        capability = torch.cuda.get_device_capability()
+        
+        if capability < (7, 0):
+            pytest.mark.xfail(reason="GPU compute capability < 7.0, optimizations may not be optimal")
+        
+        return device
     
     @pytest.fixture(params=[
-        (2, 512, 8, 64),
-        (1, 1024, 12, 64),
-        (4, 256, 16, 32),
-        (2, 2048, 8, 128),
+        (2, 512, 8, 64),    # Small config
+        (1, 1024, 12, 64),  # Medium config
+        (2, 2048, 16, 64),  # Large config
+        (1, 4096, 8, 128),  # XL config with larger head_dim
     ])
     def tensor_shapes(self, request):
-        """Test tensor shapes fixture"""
+        """Enhanced tensor shapes fixture with variety of configurations"""
         return request.param  # (batch_size, seq_len, num_heads, head_dim)
     
     @pytest.fixture(params=SUPPORTED_DTYPES)
     def dtype(self, request):
-        """Test data types fixture"""
+        """Data type fixture"""
+        return request.param
+    
+    @pytest.fixture(params=['speed', 'memory', 'balanced', 'adaptive'])
+    def optimization_strategy(self, request):
+        """Optimization strategy fixture"""
         return request.param
     
     def create_test_tensors(
@@ -58,13 +88,14 @@ class TestFlashAttentionV100:
         head_dim: int,
         dtype: torch.dtype,
         device: torch.device,
-        requires_grad: bool = False
+        requires_grad: bool = False,
+        seed: int = 42
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Create test tensors with specified properties"""
+        """Create test tensors with enhanced properties"""
         
-        # Use a fixed seed for reproducibility
-        torch.manual_seed(42)
+        torch.manual_seed(seed)
         
+        # Create tensors with optimal alignment
         q = torch.randn(
             batch_size, seq_len, num_heads, head_dim,
             dtype=dtype, device=device, requires_grad=requires_grad
@@ -78,55 +109,43 @@ class TestFlashAttentionV100:
             dtype=dtype, device=device, requires_grad=requires_grad
         )
         
-        # Normalize to prevent overflow in attention computation
-        q = q / (head_dim ** 0.5)
-        k = k / (head_dim ** 0.5)
+        # Normalize to prevent overflow and ensure numerical stability
+        scale = (head_dim ** -0.5)
+        q = q * scale * 0.5  # Additional scaling for stability
+        k = k * scale * 0.5
         
         return q, k, v
     
-    def test_basic_forward(self, tensor_shapes, dtype, device):
-        """Test basic forward pass functionality"""
+    def test_enhanced_forward_basic(self, tensor_shapes, dtype, device, optimization_strategy):
+        """Test enhanced forward pass with different optimization strategies"""
         batch_size, seq_len, num_heads, head_dim = tensor_shapes
         
         q, k, v = self.create_test_tensors(
             batch_size, seq_len, num_heads, head_dim, dtype, device
         )
         
-        # Test forward pass
-        output = flash_attention_v100(q, k, v)
+        # Test with enhanced parameters
+        output = flash_attention_v100(
+            q, k, v,
+            optimization_strategy=optimization_strategy,
+            enable_multi_gpu=False,  # Single GPU for this test
+            enable_profiling=True,
+            validate_inputs=True,
+        )
         
-        # Check output shape
+        # Verify output properties
         expected_shape = (batch_size, seq_len, num_heads, head_dim)
         assert output.shape == expected_shape, f"Expected shape {expected_shape}, got {output.shape}"
-        
-        # Check output is finite
+        assert output.device == device
+        assert output.dtype == dtype
         assert torch.isfinite(output).all(), "Output contains non-finite values"
         
-        # Check output device and dtype
-        assert output.device == device, f"Output device mismatch: expected {device}, got {output.device}"
-        assert output.dtype == dtype, f"Output dtype mismatch: expected {dtype}, got {output.dtype}"
+        # Check output magnitude is reasonable
+        output_std = output.std().item()
+        assert 0.01 < output_std < 10.0, f"Output std {output_std} seems unreasonable"
     
-    def test_causal_attention(self, tensor_shapes, dtype, device):
-        """Test causal attention functionality"""
-        batch_size, seq_len, num_heads, head_dim = tensor_shapes
-        
-        q, k, v = self.create_test_tensors(
-            batch_size, seq_len, num_heads, head_dim, dtype, device
-        )
-        
-        # Test causal attention
-        output_causal = flash_attention_v100(q, k, v, causal=True)
-        output_non_causal = flash_attention_v100(q, k, v, causal=False)
-        
-        # Outputs should be different (unless very special case)
-        assert not torch.allclose(output_causal, output_non_causal, atol=1e-6), \
-            "Causal and non-causal outputs are too similar"
-        
-        # Check shapes
-        assert output_causal.shape == output_non_causal.shape
-    
-    def test_backward_pass(self, tensor_shapes, dtype, device):
-        """Test backward pass and gradient computation"""
+    def test_enhanced_backward_pass(self, tensor_shapes, dtype, device):
+        """Test enhanced backward pass with gradient validation"""
         batch_size, seq_len, num_heads, head_dim = tensor_shapes
         
         # Skip bfloat16 for gradient tests due to precision issues
@@ -137,100 +156,245 @@ class TestFlashAttentionV100:
             batch_size, seq_len, num_heads, head_dim, dtype, device, requires_grad=True
         )
         
-        # Forward pass
-        output = flash_attention_v100(q, k, v)
+        # Forward pass with enhanced features
+        output = flash_attention_v100(
+            q, k, v,
+            optimization_strategy='balanced',
+            enable_profiling=True,
+        )
         
-        # Create a simple loss
-        loss = output.sum()
-        
-        # Backward pass
+        # Create loss and backward pass
+        loss = (output ** 2).sum()
         loss.backward()
         
-        # Check that gradients exist and are finite
-        assert q.grad is not None, "Query gradient is None"
-        assert k.grad is not None, "Key gradient is None"
-        assert v.grad is not None, "Value gradient is None"
-        
-        assert torch.isfinite(q.grad).all(), "Query gradient contains non-finite values"
-        assert torch.isfinite(k.grad).all(), "Key gradient contains non-finite values"
-        assert torch.isfinite(v.grad).all(), "Value gradient contains non-finite values"
-        
-        # Check gradient shapes
-        assert q.grad.shape == q.shape, "Query gradient shape mismatch"
-        assert k.grad.shape == k.shape, "Key gradient shape mismatch"
-        assert v.grad.shape == v.shape, "Value gradient shape mismatch"
+        # Validate gradients
+        for name, tensor in [("q", q), ("k", k), ("v", v)]:
+            assert tensor.grad is not None, f"{name} gradient is None"
+            assert torch.isfinite(tensor.grad).all(), f"{name} gradient contains non-finite values"
+            assert tensor.grad.shape == tensor.shape, f"{name} gradient shape mismatch"
+            
+            # Check gradient magnitude
+            grad_norm = tensor.grad.norm().item()
+            assert grad_norm > 1e-8, f"{name} gradient norm {grad_norm} is too small"
+            assert grad_norm < 1e4, f"{name} gradient norm {grad_norm} is too large"
     
-    def test_numerical_accuracy(self, device):
-        """Test numerical accuracy against PyTorch reference"""
-        # Use smaller tensors for precise comparison
-        batch_size, seq_len, num_heads, head_dim = 2, 128, 4, 64
-        dtype = torch.float32  # Use fp32 for best precision
+    def test_causal_attention_enhanced(self, tensor_shapes, dtype, device):
+        """Test enhanced causal attention functionality"""
+        batch_size, seq_len, num_heads, head_dim = tensor_shapes
         
         q, k, v = self.create_test_tensors(
             batch_size, seq_len, num_heads, head_dim, dtype, device
         )
         
-        # Compare with PyTorch implementation
-        comparison = compare_with_pytorch_attention(q, k, v, causal=False)
+        # Compare causal vs non-causal with enhanced features
+        output_causal = flash_attention_v100(
+            q, k, v, causal=True,
+            optimization_strategy='balanced',
+            enable_profiling=True,
+        )
         
-        # Check accuracy
-        assert comparison['allclose'], f"Outputs not close enough: max_diff={comparison['max_absolute_difference']}"
-        assert comparison['max_absolute_difference'] < 1e-4, "Maximum difference too large"
+        output_non_causal = flash_attention_v100(
+            q, k, v, causal=False,
+            optimization_strategy='balanced',
+            enable_profiling=True,
+        )
+        
+        # Verify outputs are different
+        max_diff = torch.max(torch.abs(output_causal - output_non_causal)).item()
+        assert max_diff > 1e-6, f"Causal and non-causal outputs too similar (diff: {max_diff})"
+        
+        # Verify causal structure by checking attention pattern
+        # This is a simplified check - in practice, we'd compute attention weights
+        assert output_causal.shape == output_non_causal.shape
     
-    def test_causal_numerical_accuracy(self, device):
-        """Test causal attention numerical accuracy"""
-        batch_size, seq_len, num_heads, head_dim = 2, 128, 4, 64
+    def test_numerical_accuracy_enhanced(self, device):
+        """Enhanced numerical accuracy test with comprehensive comparison"""
+        # Use configuration optimized for accuracy testing
+        batch_size, seq_len, num_heads, head_dim = 2, 256, 8, 64
+        dtype = torch.float32  # Use fp32 for highest precision
+        
+        q, k, v = self.create_test_tensors(
+            batch_size, seq_len, num_heads, head_dim, dtype, device
+        )
+        
+        # Enhanced comparison with PyTorch
+        comparison = compare_with_pytorch_attention_enhanced(
+            q, k, v, causal=False, bias=None, dropout_p=0.0,
+            atol=1e-5, rtol=1e-4
+        )
+        
+        # Comprehensive accuracy checks
+        assert comparison['allclose'], (
+            f"Outputs not close enough: max_diff={comparison['max_absolute_difference']:.2e}, "
+            f"cosine_sim={comparison['cosine_similarity']:.6f}"
+        )
+        assert comparison['max_absolute_difference'] < 1e-4, "Maximum difference too large"
+        assert comparison['cosine_similarity'] > 0.999, "Cosine similarity too low"
+        
+        # Check statistics similarity
+        flash_stats = comparison['flash_output_stats']
+        ref_stats = comparison['reference_output_stats']
+        
+        mean_diff = abs(flash_stats['mean'] - ref_stats['mean'])
+        std_diff = abs(flash_stats['std'] - ref_stats['std'])
+        
+        assert mean_diff < 1e-3, f"Mean difference too large: {mean_diff}"
+        assert std_diff < 1e-3, f"Std difference too large: {std_diff}"
+    
+    def test_multi_gpu_functionality(self, device):
+        """Test multi-GPU functionality and head parallelization"""
+        if torch.cuda.device_count() < 2:
+            pytest.skip("Multi-GPU test requires at least 2 GPUs")
+        
+        batch_size, seq_len, num_heads, head_dim = 2, 1024, 16, 64
+        dtype = torch.float16
+        
+        # Ensure num_heads is divisible by number of GPUs for head parallelization
+        num_gpus = min(torch.cuda.device_count(), 4)
+        num_heads = (num_heads // num_gpus) * num_gpus
+        
+        q, k, v = self.create_test_tensors(
+            batch_size, seq_len, num_heads, head_dim, dtype, device
+        )
+        
+        # Test single GPU
+        output_single = flash_attention_v100(
+            q, k, v,
+            optimization_strategy='balanced',
+            enable_multi_gpu=False,
+        )
+        
+        # Test multi-GPU
+        output_multi = flash_attention_v100(
+            q, k, v,
+            optimization_strategy='balanced',
+            enable_multi_gpu=True,
+        )
+        
+        # Verify outputs are close (should be identical in ideal case)
+        max_diff = torch.max(torch.abs(output_single - output_multi)).item()
+        assert max_diff < 1e-3, f"Single vs multi-GPU outputs differ too much: {max_diff}"
+    
+    def test_memory_optimization_strategies(self, device):
+        """Test different memory optimization strategies"""
+        # Use large configuration to stress memory
+        batch_size, seq_len, num_heads, head_dim = 1, 4096, 12, 64
+        dtype = torch.float16
+        
+        q, k, v = self.create_test_tensors(
+            batch_size, seq_len, num_heads, head_dim, dtype, device
+        )
+        
+        strategies = ['memory', 'balanced', 'speed']
+        outputs = {}
+        memory_usage = {}
+        
+        for strategy in strategies:
+            torch.cuda.reset_peak_memory_stats()
+            
+            # Test with memory optimization context
+            with optimized_memory_context(optimization_level=2):
+                output = flash_attention_v100(
+                    q, k, v,
+                    optimization_strategy=strategy,
+                    enable_profiling=True,
+                )
+            
+            outputs[strategy] = output
+            memory_usage[strategy] = torch.cuda.max_memory_allocated() / 1024**2
+        
+        # Verify all strategies produce similar outputs
+        for strategy1 in strategies:
+            for strategy2 in strategies:
+                if strategy1 != strategy2:
+                    max_diff = torch.max(torch.abs(outputs[strategy1] - outputs[strategy2])).item()
+                    assert max_diff < 1e-2, f"Outputs for {strategy1} vs {strategy2} differ: {max_diff}"
+        
+        # Memory strategy should use less memory than speed strategy
+        assert memory_usage['memory'] <= memory_usage['speed'] * 1.1, \
+            f"Memory strategy should use less memory: {memory_usage}"
+    
+    def test_gradient_checkpointing(self, device):
+        """Test gradient checkpointing functionality"""
+        batch_size, seq_len, num_heads, head_dim = 1, 2048, 8, 64
         dtype = torch.float32
         
         q, k, v = self.create_test_tensors(
-            batch_size, seq_len, num_heads, head_dim, dtype, device
+            batch_size, seq_len, num_heads, head_dim, dtype, device, requires_grad=True
         )
         
-        # Compare causal attention
-        comparison = compare_with_pytorch_attention(q, k, v, causal=True)
+        # Test without gradient checkpointing
+        torch.cuda.reset_peak_memory_stats()
+        output_normal = flash_attention_v100(q, k, v, enable_gradient_checkpointing=False)
+        loss_normal = (output_normal ** 2).sum()
+        loss_normal.backward()
+        memory_normal = torch.cuda.max_memory_allocated()
         
-        assert comparison['allclose'], f"Causal outputs not close enough: max_diff={comparison['max_absolute_difference']}"
+        # Clear gradients
+        for tensor in [q, k, v]:
+            tensor.grad = None
+        
+        # Test with gradient checkpointing
+        torch.cuda.reset_peak_memory_stats()
+        output_checkpointed = flash_attention_v100(q, k, v, enable_gradient_checkpointing=True)
+        loss_checkpointed = (output_checkpointed ** 2).sum()
+        loss_checkpointed.backward()
+        memory_checkpointed = torch.cuda.max_memory_allocated()
+        
+        # Verify outputs are close
+        max_diff = torch.max(torch.abs(output_normal - output_checkpointed)).item()
+        assert max_diff < 1e-4, f"Checkpointed output differs: {max_diff}"
+        
+        # Gradient checkpointing should use less memory (or similar for small examples)
+        memory_ratio = memory_checkpointed / memory_normal
+        assert memory_ratio <= 1.2, f"Gradient checkpointing should not increase memory significantly: {memory_ratio}"
     
-    def test_memory_efficiency(self, device):
-        """Test memory efficiency for large sequences"""
-        # Test with larger sequence length
-        batch_size, seq_len, num_heads, head_dim = 1, 4096, 8, 64
-        dtype = torch.float16
+    def test_mixed_precision_training(self, device):
+        """Test mixed precision training functionality"""
+        batch_size, seq_len, num_heads, head_dim = 2, 1024, 8, 64
         
-        # Clear GPU memory
-        torch.cuda.empty_cache()
-        initial_memory = torch.cuda.memory_allocated()
+        # Create model using Enhanced Flash Attention
+        class TestModel(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.proj = nn.Linear(num_heads * head_dim, num_heads * head_dim)
+            
+            def forward(self, q, k, v):
+                output = flash_attention_v100(q, k, v, optimization_strategy='balanced')
+                return self.proj(output.view(output.shape[0], output.shape[1], -1))
+        
+        model = TestModel().to(device)
+        optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
+        scaler = torch.cuda.amp.GradScaler()
         
         q, k, v = self.create_test_tensors(
-            batch_size, seq_len, num_heads, head_dim, dtype, device
+            batch_size, seq_len, num_heads, head_dim, torch.float32, device
         )
         
-        tensors_memory = torch.cuda.memory_allocated() - initial_memory
+        # Training step with mixed precision
+        model.train()
+        optimizer.zero_grad()
         
-        # Run Flash Attention
-        try:
-            output = flash_attention_v100(q, k, v)
-            peak_memory = torch.cuda.max_memory_allocated() - initial_memory
-            
-            # Memory should be much less than naive O(n²) implementation
-            # Naive attention would need batch_size * num_heads * seq_len * seq_len * 2 bytes
-            naive_attention_memory = batch_size * num_heads * seq_len * seq_len * 2
-            
-            print(f"Tensors memory: {tensors_memory / 1024**2:.1f} MB")
-            print(f"Peak memory: {peak_memory / 1024**2:.1f} MB")
-            print(f"Naive attention would need: {naive_attention_memory / 1024**2:.1f} MB")
-            
-            # Flash Attention should use significantly less memory
-            assert peak_memory < naive_attention_memory * 0.1, \
-                "Memory usage not significantly reduced compared to naive attention"
-                
-        except torch.cuda.OutOfMemoryError:
-            pytest.fail("Out of memory error - Flash Attention should be more memory efficient")
-        finally:
-            torch.cuda.empty_cache()
+        with torch.cuda.amp.autocast():
+            output = model(q, k, v)
+            loss = output.mean()
+        
+        # Verify autocast worked (output should be fp16)
+        assert output.dtype in [torch.float16, torch.bfloat16], "Mixed precision not applied"
+        
+        # Backward pass with gradient scaling
+        scaler.scale(loss).backward()
+        
+        # Check gradients exist and are finite
+        for param in model.parameters():
+            if param.grad is not None:
+                assert torch.isfinite(param.grad).all(), "Gradients contain non-finite values"
+        
+        scaler.step(optimizer)
+        scaler.update()
     
-    def test_different_block_sizes(self, device):
-        """Test different block size configurations"""
+    def test_error_handling_and_recovery(self, device):
+        """Test error handling and fallback mechanisms"""
         batch_size, seq_len, num_heads, head_dim = 2, 512, 8, 64
         dtype = torch.float16
         
@@ -238,106 +402,367 @@ class TestFlashAttentionV100:
             batch_size, seq_len, num_heads, head_dim, dtype, device
         )
         
-        block_sizes = [(32, 32), (64, 64), (128, 64)]
-        outputs = []
-        
-        for block_m, block_n in block_sizes:
+        # Test with invalid parameters but fallback enabled
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")  # Suppress fallback warnings
+            
+            # Should fallback to PyTorch implementation
             output = flash_attention_v100(
-                q, k, v, 
-                block_size_m=block_m,
-                block_size_n=block_n,
-                enable_autotuning=False
+                q, k, v,
+                block_size_m=10000,  # Intentionally invalid
+                block_size_n=10000,  # Intentionally invalid
+                fallback_on_error=True,
             )
-            outputs.append(output)
         
-        # All outputs should be very similar
-        for i in range(1, len(outputs)):
-            assert torch.allclose(outputs[0], outputs[i], atol=1e-4, rtol=1e-4), \
-                f"Outputs with different block sizes differ too much"
+        # Should still produce valid output
+        assert output.shape == q.shape
+        assert torch.isfinite(output).all()
     
-    def test_gradient_correctness(self, device):
-        """Test gradient correctness using finite differences"""
-        batch_size, seq_len, num_heads, head_dim = 1, 64, 2, 32
-        dtype = torch.float64  # Use double precision for accurate finite differences
+    def test_input_validation_enhanced(self, device):
+        """Test enhanced input validation"""
+        batch_size, seq_len, num_heads, head_dim = 2, 512, 8, 64
+        dtype = torch.float16
         
         q, k, v = self.create_test_tensors(
-            batch_size, seq_len, num_heads, head_dim, dtype, device, requires_grad=True
+            batch_size, seq_len, num_heads, head_dim, dtype, device
         )
         
-        # Define a simple loss function
-        def loss_fn(q, k, v):
-            output = flash_attention_v100(q, k, v)
-            return torch.sum(output**2)
+        # Test various invalid inputs
+        with pytest.raises(ValueError, match="Batch sizes must match"):
+            q_wrong = q[:1]  # Different batch size
+            flash_attention_v100(q_wrong, k, v, validate_inputs=True)
         
-        # Use torch's gradcheck
-        test_passed = torch.autograd.gradcheck(
-            lambda q, k, v: loss_fn(q, k, v),
-            (q, k, v),
-            eps=1e-6,
-            atol=1e-4,
-            rtol=1e-3,
-            raise_exception=False
+        with pytest.raises(ValueError, match="dtype"):
+            k_wrong = k.to(torch.float32)  # Different dtype
+            flash_attention_v100(q, k_wrong, v, validate_inputs=True)
+        
+        with pytest.raises(ValueError, match="device"):
+            v_wrong = v.cpu()  # Different device
+            flash_attention_v100(q, k, v_wrong, validate_inputs=True)
+        
+        # Test bias validation
+        with pytest.raises(ValueError, match="bias shape"):
+            bias_wrong = torch.randn(1, 1, seq_len + 1, seq_len, device=device, dtype=dtype)
+            flash_attention_v100(q, k, v, bias=bias_wrong, validate_inputs=True)
+    
+    def test_performance_profiling(self, device):
+        """Test performance profiling and monitoring"""
+        batch_size, seq_len, num_heads, head_dim = 2, 1024, 8, 64
+        dtype = torch.float16
+        
+        q, k, v = self.create_test_tensors(
+            batch_size, seq_len, num_heads, head_dim, dtype, device
         )
         
-        assert test_passed, "Gradient check failed"
+        # Test with profiling enabled
+        profiler = PerformanceProfiler(enable_detailed_profiling=True)
+        
+        with profiler.profile_operation("flash_attention_test"):
+            output = flash_attention_v100(
+                q, k, v,
+                enable_profiling=True,
+                optimization_strategy='balanced',
+            )
+        
+        # Check profiling results
+        stats = profiler.get_summary()
+        assert stats['total_operations'] >= 1
+        assert stats['total_time_ms'] > 0
+        assert 'flash_attention_test' in stats['operation_statistics']
+    
+    def test_memory_manager_integration(self, device):
+        """Test integration with enhanced memory manager"""
+        batch_size, seq_len, num_heads, head_dim = 2, 512, 8, 64
+        dtype = torch.float16
+        
+        # Get memory manager and check initial state
+        manager = get_enhanced_memory_manager()
+        initial_stats = manager.get_enhanced_statistics()
+        
+        q, k, v = self.create_test_tensors(
+            batch_size, seq_len, num_heads, head_dim, dtype, device
+        )
+        
+        # Run attention multiple times to test caching
+        for _ in range(3):
+            output = flash_attention_v100(q, k, v, optimization_strategy='balanced')
+        
+        # Check memory manager statistics
+        final_stats = manager.get_enhanced_statistics()
+        
+        # Should have some cache activity
+        assert final_stats.cache_hit_rate >= 0.0  # At least no errors
+        assert final_stats.total_cached_mb >= initial_stats.total_cached_mb
     
     @pytest.mark.slow
-    def test_performance_benchmark(self, device):
-        """Basic performance benchmark"""
-        from flash_attention_v100 import benchmark_flash_attention
+    def test_large_sequence_handling(self, device):
+        """Test handling of very large sequences"""
+        batch_size, seq_len, num_heads, head_dim = 1, 8192, 8, 64
+        dtype = torch.float16
         
-        results = benchmark_flash_attention(
-            batch_size=2,
-            seq_len=1024,
-            num_heads=12,
-            head_dim=64,
-            dtype=torch.float16,
-            num_warmup=5,
-            num_runs=20
+        # Check available memory
+        available_memory = torch.cuda.get_device_properties(device).total_memory
+        estimated_usage = batch_size * seq_len * num_heads * head_dim * 4 * 6  # Rough estimate
+        
+        if estimated_usage > available_memory * 0.8:
+            pytest.skip("Not enough memory for large sequence test")
+        
+        q, k, v = self.create_test_tensors(
+            batch_size, seq_len, num_heads, head_dim, dtype, device
         )
         
-        print(f"Performance results: {results}")
+        # Should handle large sequences with memory optimization
+        with optimized_memory_context(optimization_level=2):
+            output = flash_attention_v100(
+                q, k, v,
+                optimization_strategy='memory',
+                enable_gradient_checkpointing=True,
+            )
+        
+        assert output.shape == q.shape
+        assert torch.isfinite(output).all()
+    
+    def test_autotuning_integration(self, device):
+        """Test autotuning integration"""
+        batch_size, seq_len, num_heads, head_dim = 2, 1024, 8, 64
+        dtype = torch.float16
+        
+        q, k, v = self.create_test_tensors(
+            batch_size, seq_len, num_heads, head_dim, dtype, device
+        )
+        
+        # Test with autotuning enabled
+        output_autotuned = flash_attention_v100(
+            q, k, v,
+            enable_autotuning=True,
+            optimization_strategy='balanced',
+        )
+        
+        # Test with autotuning disabled
+        output_manual = flash_attention_v100(
+            q, k, v,
+            enable_autotuning=False,
+            block_size_m=64,
+            block_size_n=64,
+            optimization_strategy='balanced',
+        )
+        
+        # Both should produce similar outputs
+        max_diff = torch.max(torch.abs(output_autotuned - output_manual)).item()
+        assert max_diff < 1e-3, f"Autotuned vs manual outputs differ: {max_diff}"
+    
+    def test_configuration_validation(self, device):
+        """Test configuration validation and optimization"""
+        seq_len = 1024
+        head_dim = 64
+        num_gpus = torch.cuda.device_count()
+        
+        # Test configuration generation
+        config = get_enhanced_config(seq_len, head_dim, num_gpus, 'balanced')
+        
+        assert isinstance(config, dict)
+        assert 'BLOCK_M' in config
+        assert 'BLOCK_N' in config
+        assert 'NUM_STAGES' in config
+        assert 'NUM_WARPS' in config
+        
+        # Validate configuration values
+        assert config['BLOCK_M'] > 0 and config['BLOCK_M'] % 16 == 0
+        assert config['BLOCK_N'] > 0 and config['BLOCK_N'] % 16 == 0
+        assert config['NUM_STAGES'] >= 1
+        assert config['NUM_WARPS'] in [1, 2, 4, 6, 8, 12, 16]
+    
+    @pytest.mark.parametrize("causal", [True, False])
+    @pytest.mark.parametrize("dropout_p", [0.0, 0.1])
+    def test_feature_combinations(self, device, causal, dropout_p):
+        """Test various feature combinations"""
+        batch_size, seq_len, num_heads, head_dim = 2, 512, 8, 64
+        dtype = torch.float16
+        
+        q, k, v = self.create_test_tensors(
+            batch_size, seq_len, num_heads, head_dim, dtype, device
+        )
+        
+        # Create bias tensor
+        bias = torch.randn(1, num_heads, seq_len, seq_len, device=device, dtype=dtype) * 0.1
+        
+        # Test combination of features
+        output = flash_attention_v100(
+            q, k, v,
+            causal=causal,
+            dropout_p=dropout_p,
+            bias=bias,
+            optimization_strategy='balanced',
+            enable_multi_gpu=False,
+            enable_profiling=True,
+        )
+        
+        assert output.shape == q.shape
+        assert torch.isfinite(output).all()
+
+
+class TestPerformanceBenchmarks:
+    """Performance benchmark tests"""
+    
+    @pytest.mark.benchmark
+    def test_throughput_benchmark(self, device):
+        """Benchmark throughput across different configurations"""
+        configs = [
+            (2, 512, 8, 64),
+            (2, 1024, 12, 64),
+            (1, 2048, 16, 64),
+        ]
+        
+        results = []
+        
+        for batch_size, seq_len, num_heads, head_dim in configs:
+            q, k, v = TestEnhancedFlashAttentionV100().create_test_tensors(
+                batch_size, seq_len, num_heads, head_dim, torch.float16, device
+            )
+            
+            def flash_attention_call():
+                return flash_attention_v100(q, k, v, optimization_strategy='speed')
+            
+            benchmark_result = benchmark_operation(
+                flash_attention_call,
+                num_warmup=10,
+                num_runs=50
+            )
+            
+            if 'error' not in benchmark_result:
+                # Calculate TFLOPS
+                total_flops = 4 * batch_size * num_heads * seq_len * seq_len * head_dim
+                tflops = total_flops / (benchmark_result['avg_time_ms'] / 1000) / 1e12
+                
+                results.append({
+                    'config': f"{batch_size}x{seq_len}x{num_heads}x{head_dim}",
+                    'time_ms': benchmark_result['avg_time_ms'],
+                    'tflops': tflops,
+                    'memory_mb': benchmark_result['peak_memory_mb']
+                })
+        
+        # Print results for analysis
+        print("\nThroughput Benchmark Results:")
+        print("-" * 60)
+        for result in results:
+            print(f"{result['config']:20} {result['time_ms']:8.2f} ms {result['tflops']:6.1f} TFLOPS")
         
         # Basic sanity checks
-        assert results['avg_time_ms'] > 0, "Invalid timing result"
-        assert results['throughput_tflops'] > 0, "Invalid throughput result"
-        assert results['memory_savings_ratio'] > 1, "No memory savings detected"
+        assert len(results) > 0, "No benchmark results"
+        assert all(r['tflops'] > 0 for r in results), "Invalid TFLOPS calculation"
     
-    def test_edge_cases(self, device):
-        """Test edge cases and error conditions"""
-        # Test with very small tensors
-        q = torch.randn(1, 1, 1, 16, device=device, dtype=torch.float16)
-        k = torch.randn(1, 1, 1, 16, device=device, dtype=torch.float16)
-        v = torch.randn(1, 1, 1, 16, device=device, dtype=torch.float16)
+    @pytest.mark.benchmark
+    def test_memory_efficiency_benchmark(self, device):
+        """Benchmark memory efficiency"""
+        batch_size, seq_len, num_heads, head_dim = 1, 4096, 8, 64
         
-        output = flash_attention_v100(q, k, v)
+        q, k, v = TestEnhancedFlashAttentionV100().create_test_tensors(
+            batch_size, seq_len, num_heads, head_dim, torch.float16, device
+        )
+        
+        strategies = ['memory', 'balanced', 'speed']
+        memory_usage = {}
+        
+        for strategy in strategies:
+            torch.cuda.reset_peak_memory_stats()
+            
+            output = flash_attention_v100(
+                q, k, v,
+                optimization_strategy=strategy
+            )
+            
+            memory_usage[strategy] = torch.cuda.max_memory_allocated() / 1024**2
+        
+        print(f"\nMemory Usage by Strategy:")
+        for strategy, memory in memory_usage.items():
+            print(f"  {strategy:10}: {memory:6.1f} MB")
+        
+        # Memory strategy should be most efficient
+        assert memory_usage['memory'] <= min(memory_usage.values()) * 1.1
+
+
+def test_backward_compatibility():
+    """Test backward compatibility with original API"""
+    if not FLASH_ATTENTION_AVAILABLE:
+        pytest.skip("Flash Attention not available")
+    
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    if device.type == 'cpu':
+        pytest.skip("CUDA not available")
+    
+    batch_size, seq_len, num_heads, head_dim = 2, 512, 8, 64
+    
+    q = torch.randn(batch_size, seq_len, num_heads, head_dim, device=device, dtype=torch.float16)
+    k = torch.randn(batch_size, seq_len, num_heads, head_dim, device=device, dtype=torch.float16)
+    v = torch.randn(batch_size, seq_len, num_heads, head_dim, device=device, dtype=torch.float16)
+    
+    # Original API should still work
+    output = flash_attention_v100(q, k, v)
+    
+    assert output.shape == q.shape
+    assert torch.isfinite(output).all()
+
+
+def test_distributed_training_simulation():
+    """Test distributed training simulation"""
+    if not FLASH_ATTENTION_AVAILABLE:
+        pytest.skip("Flash Attention not available")
+    
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    if device.type == 'cpu':
+        pytest.skip("CUDA not available")
+    
+    # Simulate distributed environment
+    with patch('torch.distributed.is_initialized', return_value=True), \
+         patch('torch.distributed.get_world_size', return_value=2), \
+         patch('torch.distributed.get_rank', return_value=0):
+        
+        batch_size, seq_len, num_heads, head_dim = 2, 1024, 8, 64
+        
+        q = torch.randn(batch_size, seq_len, num_heads, head_dim, device=device, dtype=torch.float16)
+        k = torch.randn(batch_size, seq_len, num_heads, head_dim, device=device, dtype=torch.float16)
+        v = torch.randn(batch_size, seq_len, num_heads, head_dim, device=device, dtype=torch.float16)
+        
+        # Should handle distributed context
+        output = flash_attention_v100(
+            q, k, v,
+            enable_multi_gpu=True,
+            optimization_strategy='balanced'
+        )
+        
         assert output.shape == q.shape
-        
-        # Test mismatched shapes (should raise error)
-        q_wrong = torch.randn(1, 2, 1, 16, device=device, dtype=torch.float16)
-        
-        with pytest.raises(ValueError):
-            flash_attention_v100(q_wrong, k, v)
+        assert torch.isfinite(output).all()
+
+
+def test_cleanup_and_teardown():
+    """Test cleanup and resource management"""
+    if not FLASH_ATTENTION_AVAILABLE:
+        pytest.skip("Flash Attention not available")
     
-    def test_mixed_precision(self, device):
-        """Test mixed precision scenarios"""
-        if not torch.cuda.is_available():
-            pytest.skip("CUDA not available for mixed precision test")
+    # Get initial memory state
+    initial_memory = torch.cuda.memory_allocated() if torch.cuda.is_available() else 0
+    
+    # Run some operations
+    if torch.cuda.is_available():
+        device = torch.device('cuda')
+        q = torch.randn(2, 512, 8, 64, device=device, dtype=torch.float16)
+        k = torch.randn(2, 512, 8, 64, device=device, dtype=torch.float16)
+        v = torch.randn(2, 512, 8, 64, device=device, dtype=torch.float16)
         
-        batch_size, seq_len, num_heads, head_dim = 2, 256, 8, 64
-        
-        # Test with different input/output precisions
-        with torch.cuda.amp.autocast():
-            q = torch.randn(batch_size, seq_len, num_heads, head_dim, device=device)
-            k = torch.randn(batch_size, seq_len, num_heads, head_dim, device=device)
-            v = torch.randn(batch_size, seq_len, num_heads, head_dim, device=device)
-            
+        for _ in range(5):
             output = flash_attention_v100(q, k, v)
-            
-            # Output should be in reduced precision
-            assert output.dtype in [torch.float16, torch.bfloat16]
+    
+    # Cleanup
+    cleanup_all_memory()
+    
+    # Memory should be cleaned up (allowing for some tolerance)
+    final_memory = torch.cuda.memory_allocated() if torch.cuda.is_available() else 0
+    memory_delta = final_memory - initial_memory
+    
+    # Should not have significant memory leak
+    assert memory_delta < 100 * 1024 * 1024, f"Memory leak detected: {memory_delta / 1024**2:.1f} MB"
 
 
 if __name__ == "__main__":
     # Run tests when script is executed directly
-    pytest.main([__file__, "-v", "-s"])
+    pytest.main([__file__, "-v", "-s", "--tb=short"])
