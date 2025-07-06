@@ -18,9 +18,9 @@ Main Features:
 
 import torch
 try:
-    from .config import SUPPORTED_DTYPES, MIN_CUDA_VERSION, V100_COMPUTE_CAPABILITY
-    from .interface import flash_attention_v100
-    from .ops.attention import FlashAttentionV100Function
+    from config import SUPPORTED_DTYPES, MIN_CUDA_VERSION, V100_COMPUTE_CAPABILITY
+    from interface import flash_attention_v100
+    from ops.attention import FlashAttentionV100Function
 except ImportError:
     # Fallback for testing without full package setup
     SUPPORTED_DTYPES = {torch.float16, torch.bfloat16, torch.float32}
@@ -108,7 +108,7 @@ __all__ = [
 
 # Convenience imports for users
 try:
-    from .ops.attention import (
+    from ops.attention import (
         flash_attention_forward,
         flash_attention_backward,
     )

@@ -1,0 +1,34 @@
+include README.md
+include LICENSE
+include requirements.txt
+include pyproject.toml
+include setup.py
+
+# Include all Python files
+include *.py
+recursive-include kernels *.py
+recursive-include ops *.py
+recursive-include tests *.py
+recursive-include examples *.py
+
+# Include configuration files
+recursive-include . *.toml
+recursive-include . *.yaml
+recursive-include . *.yml
+
+# Exclude compiled files and caches
+global-exclude *.pyc
+global-exclude *.pyo
+global-exclude *.pyd
+global-exclude __pycache__
+global-exclude *.so
+global-exclude .DS_Store
+global-exclude *.egg-info
+
+# Exclude development files
+exclude .gitignore
+exclude .pre-commit-config.yaml
+exclude tox.ini
+recursive-exclude .git *
+recursive-exclude .pytest_cache *
+recursive-exclude .mypy_cache *

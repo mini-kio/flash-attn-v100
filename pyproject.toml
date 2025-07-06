@@ -1,0 +1,124 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "flash-attention-v100"
+version = "1.0.0"
+description = "Optimized Flash Attention implementation for V100 GPUs using Triton"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "Apache-2.0"}
+authors = [
+    {name = "MINI_kio", email = "kiolaaoz@naver.com"}
+]
+keywords = ["attention", "transformer", "pytorch", "triton", "v100", "gpu"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+
+dependencies = [
+    "torch>=2.0.0",
+    "triton>=2.1.0",
+    "numpy>=1.20.0",
+    "psutil>=5.8.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=6.0.0",
+    "pytest-xdist>=2.0.0",
+    "black>=22.0.0",
+    "flake8>=4.0.0",
+    "mypy>=0.900",
+]
+test = [
+    "pytest>=6.0.0",
+    "pytest-xdist>=2.0.0",
+    "pytest-benchmark>=3.0.0",
+]
+docs = [
+    "sphinx>=4.0.0",
+    "sphinx-rtd-theme>=1.0.0",
+    "myst-parser>=0.15.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/mini-kio/flash-attn-v100"
+Repository = "https://github.com/mini-kio/flash-attn-v100"
+Documentation = "https://flash-attn-v100.readthedocs.io/"
+"Bug Reports" = "https://github.com/mini-kio/flash-attn-v100/issues"
+
+[project.scripts]
+flash-attn-benchmark = "flash_attention_v100.examples.basic_usage:main"
+
+[tool.setuptools.packages.find]
+include = ["*"]
+
+[tool.setuptools.package-data]
+"*" = ["*.py"]
+
+[tool.black]
+line-length = 100
+target-version = ['py38', 'py39', 'py310', 'py311']
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+  # directories
+  \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | build
+  | dist
+)/
+'''
+
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+warn_unreachable = true
+strict_equality = true
+
+[tool.pytest.ini_options]
+minversion = "6.0"
+addopts = "-ra -q --strict-markers --strict-config"
+testpaths = ["tests"]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "fast: marks tests as fast",
+    "unit: marks tests as unit tests",
+    "integration: marks tests as integration tests",
+    "benchmark: marks tests as benchmark tests",
+    "v100_required: marks tests as requiring V100 GPU",
+    "multi_gpu: marks tests as requiring multiple GPUs",
+    "fp16: marks tests as using fp16 precision",
+    "fp32: marks tests as using fp32 precision",
+    "bfloat16: marks tests as using bfloat16 precision",
+]
+filterwarnings = [
+    "ignore::UserWarning",
+    "ignore::DeprecationWarning",
+]
