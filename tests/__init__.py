@@ -44,6 +44,18 @@ def skip_if_no_v100():
     if not check_v100_available():
         pytest.skip("V100 or compatible GPU not available")
 
+# Shared device fixture
+@pytest.fixture
+def device():
+    """Return CUDA device, skipping or xfail when appropriate."""
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA not available")
+    dev = torch.device('cuda')
+    capability = torch.cuda.get_device_capability()
+    if capability < (7, 0):
+        pytest.xfail(reason="GPU compute capability < 7.0, optimizations may not be optimal")
+    return dev
+
 def create_test_tensors(
     batch_size: int,
     seq_len: int, 
@@ -203,6 +215,7 @@ __all__ = [
     'get_test_device',
     'check_v100_available',
     'skip_if_no_v100',
+    'device',
     'create_test_tensors',
     'get_tolerance_for_dtype',
     'TestCategories',
