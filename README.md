@@ -26,16 +26,16 @@ An optimized implementation of Flash Attention for V100 GPUs using Triton kernel
 ### Install from source
 
 ```bash
-git clone https://github.com/flash-attn-v100/flash-attention-v100.git
-cd flash-attention-v100
+git clone https://github.com/mini-kio/flash-attn-v100.git
+cd flash-attn-v100
 pip install .
 ```
 
 ### Development installation
 
 ```bash
-git clone https://github.com/flash-attn-v100/flash-attention-v100.git
-cd flash-attention-v100
+git clone https://github.com/mini-kio/flash-attn-v100.git
+cd flash-attn-v100
 pip install -e ".[dev]"
 ```
 
@@ -142,13 +142,13 @@ pytest tests/ --cov=flash_attention_v100
 
 ## Contributing
 
-We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details.
+Contributions are welcome. Use the [issue tracker](https://github.com/mini-kio/flash-attn-v100/issues) to report bugs or discuss proposed changes.
 
 ### Development Setup
 
 ```bash
-git clone https://github.com/flash-attn-v100/flash-attention-v100.git
-cd flash-attention-v100
+git clone https://github.com/mini-kio/flash-attn-v100.git
+cd flash-attn-v100
 pip install -e ".[dev]"
 pre-commit install
 ```
@@ -179,7 +179,7 @@ If you use Flash Attention V100 in your research, please cite:
   title = {Flash Attention V100: Optimized Attention for V100 GPUs},
   author = {Flash Attention V100 Team},
   year = {2024},
-  url = {https://github.com/flash-attn-v100/flash-attention-v100},
+  url = {https://github.com/mini-kio/flash-attn-v100},
 }
 ```
 
@@ -191,6 +191,5 @@ If you use Flash Attention V100 in your research, please cite:
 
 ## Support
 
-- GitHub Issues: [Report bugs and request features](https://github.com/flash-attn-v100/flash-attention-v100/issues)
+- GitHub Issues: [Report bugs and request features](https://github.com/mini-kio/flash-attn-v100/issues)
 - Documentation: [Read the docs](https://flash-attn-v100.readthedocs.io/)
-- Discussions: [Join community discussions](https://github.com/flash-attn-v100/flash-attention-v100/discussions)
